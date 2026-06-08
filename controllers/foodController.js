@@ -81,6 +81,7 @@ const createFood = async (req, res) => {
             category,
             preparationTime,
             available: available !== undefined ? available : true,
+            additionalInfo: req.body.additionalInfo?.trim() || "",
         });
         res.status(201).json(createdFood);
     } catch (error)
@@ -132,6 +133,7 @@ const updateFood = async (req, res) => {
         food.image = image || food.image;
         food.category = category || food.category;
         food.available = available !== undefined ? available : food.available;
+        food.additionalInfo = req.body.additionalInfo?.trim() || food.additionalInfo;
 
         const updatedFood = await food.save();
         res.json(updatedFood);

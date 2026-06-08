@@ -30,6 +30,10 @@ const foodSchema = mongoose.Schema(
         available: {
             type: Boolean,
             default: true
+        },
+        additionalInfo: {
+            type: String,
+            default: ""
         }
     }, {
     timestamps: true
