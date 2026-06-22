@@ -41,8 +41,9 @@ const createFood = async (req, res) => {
     const description = req.body.description?.trim();
     const image = req.body.image?.trim();
     const category = req.body.category?.trim();
-    const preparationTime = Number(req.body.preparationTime);
     const { price, available } = req.body;
+    const isFastFood = category === "Fast Food";
+    const preparationTime = isFastFood ? Number(req.body.preparationTime) : 0;
     try
     {
         const missingFields = [];
@@ -52,7 +53,7 @@ const createFood = async (req, res) => {
         if (price === undefined || price === null || price === "") missingFields.push("price");
         if (!image) missingFields.push("image");
         if (!category) missingFields.push("category");
-        if (!req.body.preparationTime) missingFields.push("preparationTime");
+        if (isFastFood && !req.body.preparationTime) missingFields.push("preparationTime");
 
         if (missingFields.length > 0)
         {
@@ -68,7 +69,7 @@ const createFood = async (req, res) => {
             return res.status(400).json({ message: "Price must be a valid number" });
         }
 
-        if (Number.isNaN(preparationTime) || preparationTime <= 0)
+        if (isFastFood && (Number.isNaN(preparationTime) || preparationTime <= 0))
         {
             return res.status(400).json({ message: "Preparation time must be a valid number" });
         }
@@ -78,7 +79,7 @@ const createFood = async (req, res) => {
             description,
             price: numericPrice,
             image,
-            category,
+            category: category || undefined,
             preparationTime,
             available: available !== undefined ? available : true,
             additionalInfo: req.body.additionalInfo?.trim() || "",
@@ -94,19 +95,26 @@ const createFood = async (req, res) => {
 // @route   PUT /api/foods/:id
 // @access  Private (Admin)
 const updateFood = async (req, res) => {
-    const name = req.body.name?.trim();
-    const description = req.body.description?.trim();
-    const image = req.body.image?.trim();
-    const category = req.body.category?.trim();
-    const preparationTime = req.body.preparationTime;
-    const { price, available } = req.body;
     try
     {
+        const name = req.body.name?.trim();
+        const description = req.body.description?.trim();
+        const image = req.body.image?.trim();
+        const category = req.body.category?.trim();
+        const preparationTime = req.body.preparationTime;
+        const additionalInfo = req.body.additionalInfo?.trim();
+        const { price, available } = req.body;
+
         const food = await Food.findById(req.params.id);
+
         if (!food)
         {
             return res.status(404).json({ message: "Food item not found" });
         }
+
+        const oldCategory = food.category;
+        const newCategory = category || oldCategory;
+        const isFastFood = newCategory === "Fast Food";
 
         if (price !== undefined)
         {
@@ -120,23 +128,43 @@ const updateFood = async (req, res) => {
 
         if (preparationTime !== undefined)
         {
-            const numericPreparationTime = Number(preparationTime);
-            if (Number.isNaN(numericPreparationTime) || numericPreparationTime <= 0)
+            if (isFastFood)
             {
-                return res.status(400).json({ message: "Preparation time must be a valid number" });
+                const numericPreparationTime = Number(preparationTime);
+                if (Number.isNaN(numericPreparationTime) || numericPreparationTime <= 0)
+                {
+                    return res.status(400).json({ message: "Preparation time must be a valid number" });
+                }
+                food.preparationTime = numericPreparationTime;
             }
-            food.preparationTime = numericPreparationTime;
+        }
+
+        if (newCategory !== "Fast Food")
+        {
+            food.preparationTime = 0;
+        }
+
+        if (
+            newCategory === "Fast Food" &&
+            oldCategory !== "Fast Food" &&
+            preparationTime === undefined &&
+            !food.preparationTime
+        )
+        {
+            return res.status(400).json({
+                message: "Preparation time is required for Fast Food items",
+            });
         }
 
         food.name = name || food.name;
         food.description = description || food.description;
         food.image = image || food.image;
-        food.category = category || food.category;
-        food.available = available !== undefined ? available : food.available;
-        food.additionalInfo = req.body.additionalInfo?.trim() || food.additionalInfo;
+        food.category = newCategory;
+        food.additionalInfo = additionalInfo || food.additionalInfo;
+        await food.save();
 
-        const updatedFood = await food.save();
-        res.json(updatedFood);
+        res.status(200).json(food);
+
     } catch (error)
     {
         res.status(500).json({ message: error.message });

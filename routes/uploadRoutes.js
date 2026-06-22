@@ -1,33 +1,49 @@
 import { Router } from "express";
 import upload from "../middleware/uploadMiddleware.js";
+import cloudinary from "../config/cloudinary.js";
 
 const uploadRouter = Router();
 
 uploadRouter.post("/upload", (req, res) => {
-    upload.single("image")(req, res, (error) => {
-        if (error)
+    upload.single("image")(req, res, async (error) => {
+        try
         {
-            return res.status(500).json({
-                message: error.message || "Image upload failed"
+            if (error)
+            {
+                return res.status(500).json({
+                    message: error.message || "Image upload failed",
+                });
+            }
+
+            if (!req.file)
+            {
+                return res.status(400).json({
+                    message: "No file uploaded",
+                });
+            }
+
+            const base64String = `data:${req.file.mimetype};base64,${req.file.buffer.toString("base64")}`;
+
+            const result = await cloudinary.uploader.upload(
+                base64String,
+                {
+                    folder: "food_app",
+                }
+            );
+
+            return res.status(200).json({
+                imageUrl: result.secure_url,
             });
         }
-
-        if (!req.file)
+        catch (err)
         {
-            return res.status(400).json({ message: "No file uploaded" });
-        }
+            console.error(err);
 
-        const imageUrl = req.file.path || req.file.secure_url || req.file.url;
-
-        if (!imageUrl)
-        {
             return res.status(500).json({
-                message: "Upload succeeded but no image URL was returned",
-                file: req.file,
+                message: "Cloudinary upload failed",
+                error: err.message,
             });
         }
-
-        res.status(200).json({ imageUrl });
     });
 });
 

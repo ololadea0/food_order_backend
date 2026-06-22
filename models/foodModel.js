@@ -20,11 +20,12 @@ const foodSchema = mongoose.Schema(
         },
         category: {
             type: String,
-            required: true
+            required: true,
+            default: "Fast Food"
         },
         preparationTime: {
             type: Number,
-            required: true
+            default: 0
         },
 
         available: {
