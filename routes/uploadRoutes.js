@@ -1,6 +1,6 @@
 import { Router } from "express";
 import upload from "../middleware/uploadMiddleware.js";
-import cloudinary from "../config/cloudinary.js";
+import cloudinary, { configureCloudinary } from "../config/cloudinary.js";
 
 const uploadRouter = Router();
 
@@ -24,6 +24,7 @@ uploadRouter.post("/upload", (req, res) => {
 
             const base64String = `data:${req.file.mimetype};base64,${req.file.buffer.toString("base64")}`;
 
+            configureCloudinary();
             const result = await cloudinary.uploader.upload(
                 base64String,
                 {

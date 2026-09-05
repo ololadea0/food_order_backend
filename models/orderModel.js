@@ -34,8 +34,8 @@ const orderSchema = mongoose.Schema({
 
     deliveryAddress: {
         address: { type: String, required: function () { return this.orderType === "delivery"; } },
+        landmark: { type: String },
         city: { type: String, required: function () { return this.orderType === "delivery"; } },
-        state: { type: String, required: function () { return this.orderType === "delivery"; } },
         phone: { type: String, required: function () { return this.orderType === "delivery"; } },
     },
 
@@ -51,7 +51,7 @@ const orderSchema = mongoose.Schema({
 
     status: {
         type: String,
-        enum: ["pending", "onTheWay", "availableForPickup", "preparing", "delivered", "cancelled"],
+        enum: ["pending", "confirmed", "onTheWay", "availableForPickup", "preparing", "delivered", "cancelled"],
         default: "pending",
     },
 
@@ -80,6 +80,14 @@ const orderSchema = mongoose.Schema({
     },
 
     deliveredAt: Date,
+    comments: [
+        {
+            user: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+            message: String,
+            type: { type: String, enum: ["comment", "complaint", "feedback"], default: "comment" },
+            createdAt: { type: Date, default: Date.now },
+        },
+    ],
     isDeleted: {
         type: Boolean,
         default: false,

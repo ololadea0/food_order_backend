@@ -71,8 +71,10 @@ const initializePaymentController = asyncHandler(async (req, res) => {
         });
     } catch (error)
     {
-        console.error("Payment initialization error:", error);
-        res.status(500).json({ message: "Failed to initialize payment" });
+        // Log detailed error for server logs and return a helpful message to the frontend
+        console.error("Payment initialization error:", error.response?.data || error.message || error);
+        const clientMsg = error.message || error.response?.data?.message || "Failed to initialize payment";
+        res.status(500).json({ message: clientMsg });
     }
 
 });
@@ -123,7 +125,7 @@ const verifyPaymentController = asyncHandler(async (req, res) => {
         };
 
         await order.save();
-        res.json({ 
+        res.json({
             message: "Payment verified and order updated successfully",
             orderId: order._id
         });

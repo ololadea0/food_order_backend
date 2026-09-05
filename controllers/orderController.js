@@ -1,7 +1,52 @@
 import Order from "../models/orderModel.js";
+import Notification from "../models/notificationModel.js";
 import asyncHandler from "express-async-handler";
 import Food from "../models/foodModel.js";
+import Setting from "../models/settingModel.js";
 import mongoose from "mongoose";
+
+// Server-side sanitization and Lagos LGA whitelist
+const LAGOS_LGAS = [
+    "agege",
+    "ajeromi-ifelodun",
+    "alimosho",
+    "amuwo-odofin",
+    "apapa",
+    "badagry",
+    "epe",
+    "eti-osa",
+    "ibeju-lekki",
+    "ifako-ijaiye",
+    "ikeja",
+    "ikorodu",
+    "kosofe",
+    "lagos island",
+    "lagos mainland",
+    "mushin",
+    "oshodi-isolo",
+    "ojo",
+    "surulere",
+    "somolu",
+    "ikoyi",
+    "lekki",
+];
+
+const sanitizeString = (v = "") => {
+    if (!v) return "";
+    let s = String(v).trim();
+    s = s.replace(/https?:\/\/\S+/gi, "");
+    s = s.replace(/[\x00-\x1F\x7F]/g, "");
+    s = s.replace(/[\u{1F300}-\u{1F9FF}]/gu, "");
+    s = s.replace(/\s+/g, " ");
+    return s.slice(0, 200).trim();
+};
+
+const isAllowedLagosCity = (city = "") => {
+    const c = String(city || "").toLowerCase().trim();
+    if (!c) return false;
+    if (c.includes("lagos")) return true;
+    return LAGOS_LGAS.some((g) => c === g || c.includes(g));
+};
 
 
 // @desc    Create new order
@@ -25,13 +70,35 @@ const createOrder = asyncHandler(async (req, res) => {
 
     if (orderType === "delivery")
     {
-        if (!deliveryAddress?.address || !deliveryAddress?.city || !deliveryAddress?.state || !deliveryAddress?.phone)
+        if (!deliveryAddress?.address || !deliveryAddress?.city || !deliveryAddress?.phone)
         {
             return res.status(400).json({ message: "Delivery address is required" });
         }
+        // sanitize incoming delivery address
+        deliveryAddress.address = sanitizeString(deliveryAddress.address);
+        deliveryAddress.landmark = sanitizeString(deliveryAddress.landmark || "");
+        deliveryAddress.city = sanitizeString(deliveryAddress.city);
+        deliveryAddress.phone = sanitizeString(deliveryAddress.phone);
+
+        // restrict to Lagos using explicit LGA whitelist (city = LGA)
+        if (!isAllowedLagosCity(deliveryAddress.city))
+        {
+            return res.status(400).json({ message: "Delivery is available to Lagos addresses only" });
+        }
     }
 
-    let orderDeliveryFee = orderType === "delivery" ? 1000 : 0;
+    // fetch configured delivery fee (fallback to 1000)
+    let configuredDeliveryFee = 1000;
+    try
+    {
+        const settings = await Setting.findOne();
+        if (settings && typeof settings.deliveryFee === 'number') configuredDeliveryFee = settings.deliveryFee;
+    } catch (err)
+    {
+        // ignore and use fallback
+    }
+
+    let orderDeliveryFee = orderType === "delivery" ? configuredDeliveryFee : 0;
 
     // ✅ Validate IDs first
     for (const item of orderItems)
@@ -96,7 +163,16 @@ const createOrder = asyncHandler(async (req, res) => {
 
 
     const createdOrder = await order.save();
-    res.status(201).json(createdOrder);
+    // return populated order so frontend can show food names/images immediately
+    const populatedOrder = await Order.findById(createdOrder._id).populate(
+        "orderItems.food",
+        "name price preparationTime image"
+    );
+    // also populate user phone/email for admin/frontend convenience
+    const populatedWithUser = await Order.findById(populatedOrder._id)
+        .populate("orderItems.food", "name price preparationTime image")
+        .populate("user", "name email phone");
+    res.status(201).json(populatedWithUser);
 });
 
 // @desc    Get logged in user's orders
@@ -104,7 +180,9 @@ const createOrder = asyncHandler(async (req, res) => {
 // @access  Private 
 const getMyOrders = asyncHandler(async (req, res) => {
 
-    const orders = await Order.find({ user: req.user._id, isDeleted: false }).sort({ createdAt: -1 });
+    const orders = await Order.find({ user: req.user._id, isDeleted: false })
+        .populate("orderItems.food", "name price preparationTime image")
+        .sort({ createdAt: -1 });
     res.json(orders);
 
 });
@@ -135,7 +213,10 @@ const getOrderById = asyncHandler(async (req, res) => {
 // @access  Private (Admin)
 const getOrders = asyncHandler(async (req, res) => {
 
-    const orders = await Order.find({ isDeleted: false }).populate("user", "name email").sort({ createdAt: -1 });
+    const orders = await Order.find({ isDeleted: false })
+        .populate("orderItems.food", "name price preparationTime image")
+        .populate("user", "name email phone")
+        .sort({ createdAt: -1 });
 
     res.json(orders);
 
@@ -146,7 +227,7 @@ const getOrders = asyncHandler(async (req, res) => {
 // @access  Private (Admin)
 const updateOrderStatus = asyncHandler(async (req, res) => {
 
-    const allowedStatuses = ["pending", "onTheWay", "availableForPickup", "preparing", "delivered", "cancelled"];
+    const allowedStatuses = ["pending", "confirmed", "onTheWay", "availableForPickup", "preparing", "delivered", "cancelled"];
 
     const { status } = req.body;
 
@@ -183,7 +264,26 @@ const updateOrderStatus = asyncHandler(async (req, res) => {
         order.deliveredAt = null;
     }
 
-    const updatedOrder = await order.save();
+    const saved = await order.save();
+    // re-fetch populated version to ensure client gets food details
+    const updatedOrder = await Order.findById(saved._id)
+        .populate("orderItems.food", "name price preparationTime image")
+        .populate("user", "name email phone");
+
+    // create notification for the customer about the status change
+    try
+    {
+        await Notification.create({
+            recipientUser: updatedOrder.user._id,
+            order: updatedOrder._id,
+            message: `Order #${updatedOrder._id} status updated to ${updatedOrder.status}`,
+            type: "status",
+        });
+    } catch (e)
+    {
+        // ignore notification errors
+        console.error("Failed to create notification", e);
+    }
 
     res.json(updatedOrder);
 });
@@ -234,9 +334,64 @@ const cancelOrder = asyncHandler(async (req, res) => {
         return res.status(400).json({ message: "Paid order cannot be cancelled" });
     }
     order.status = "cancelled";
-    const updatedOrder = await order.save();
+    const saved = await order.save();
+    const updatedOrder = await Order.findById(saved._id)
+        .populate("orderItems.food", "name price preparationTime image")
+        .populate("user", "name email phone");
+    try
+    {
+        await Notification.create({
+            recipientUser: updatedOrder.user._id,
+            order: updatedOrder._id,
+            message: `Your order #${updatedOrder._id} was cancelled`,
+            type: "status",
+        });
+    } catch (e)
+    {
+        console.error("Failed to create notification", e);
+    }
     res.json(updatedOrder);
 });
 
+// add comment to order (customer)
+const addOrderComment = asyncHandler(async (req, res) => {
+    const order = await Order.findOne({ _id: req.params.id, isDeleted: false });
+    if (!order) return res.status(404).json({ message: "Order not found" });
 
-export { createOrder, getMyOrders, getOrderById, getOrders, updateOrderStatus, deleteOrder, cancelOrder };
+    const { message, type } = req.body;
+    if (!message || !String(message).trim()) return res.status(400).json({ message: "Message required" });
+
+    const comment = {
+        user: req.user._id,
+        message: String(message).trim(),
+        type: type || "comment",
+        createdAt: Date.now(),
+    };
+
+    order.comments = order.comments || [];
+    order.comments.push(comment);
+    const saved = await order.save();
+
+    const populated = await Order.findById(saved._id)
+        .populate("orderItems.food", "name price preparationTime image")
+        .populate("user", "name email phone");
+
+    // notify admins about the comment
+    try
+    {
+        await Notification.create({
+            recipientRole: "admin",
+            order: populated._id,
+            message: `New comment on order #${populated._id}: ${comment.message}`,
+            type: "comment",
+        });
+    } catch (e)
+    {
+        console.error("Failed to create notification", e);
+    }
+
+    res.status(201).json(populated);
+});
+
+
+export { createOrder, getMyOrders, getOrderById, getOrders, updateOrderStatus, deleteOrder, cancelOrder, addOrderComment };

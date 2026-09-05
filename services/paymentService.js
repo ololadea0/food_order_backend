@@ -34,16 +34,21 @@ const initializeTransaction = async (email, amount, orderId) => {
                     orderId,
                 },
                 // Keep the return URL environment-driven so local and hosted deployments
-                // can share the same payment code path.
-                callback_url: `${FRONTEND_URL}/payment-success`,
+                // can share the same payment code path. Use the frontend's /payment/success
+                // route which the app maps to the payment success handler.
+                callback_url: `${FRONTEND_URL}/payment/success`,
             },
             { headers: getHeaders() }
         );
         return response.data.data; // Return the initialized transaction data
     } catch (error)
     {
-        console.error("Error initializing transaction:", error);
-        throw new Error("Failed to initialize transaction");
+        console.error("Error initializing transaction:", error.response?.data || error.message);
+        // Surface Paystack's message where available for easier debugging on frontend.
+        const msg = error.response?.data?.message || error.response?.data?.error || error.message || "Failed to initialize transaction";
+        const err = new Error(msg);
+        err.original = error;
+        throw err;
     }
 };
 

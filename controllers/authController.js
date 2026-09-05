@@ -1,10 +1,69 @@
 import jwt from "jsonwebtoken";
 import User from "../models/userModel.js";
 
+// Basic server-side sanitization and Lagos LGA whitelist
+const LAGOS_LGAS = [
+    "agege",
+    "ajeromi-ifelodun",
+    "alimosho",
+    "amuwo-odofin",
+    "apapa",
+    "badagry",
+    "epe",
+    "eti-osa",
+    "ibeju-lekki",
+    "ifako-ijaiye",
+    "ikeja",
+    "ikorodu",
+    "kosofe",
+    "lagos island",
+    "lagos mainland",
+    "mushin",
+    "oshodi-isolo",
+    "ojo",
+    "surulere",
+    "somolu",
+    "ikoyi",
+    "lekki",
+    "ikorodu north",
+    "ikorodu south",
+];
+
+const sanitizeString = (v = "") => {
+    if (!v) return "";
+    let s = String(v).trim();
+    // remove urls
+    s = s.replace(/https?:\/\/\S+/gi, "");
+    // remove control chars
+    s = s.replace(/[\x00-\x1F\x7F]/g, "");
+    // remove many emoji ranges
+    s = s.replace(/[\u{1F300}-\u{1F9FF}]/gu, "");
+    // collapse whitespace
+    s = s.replace(/\s+/g, " ");
+    return s.slice(0, 200).trim();
+};
+
+const isAllowedLagosCity = (city = "") => {
+    const c = String(city || "").toLowerCase().trim();
+    if (!c) return false;
+    if (c.includes("lagos")) return true;
+    return LAGOS_LGAS.some((g) => c === g || c.includes(g));
+};
+
 const generateToken = (id) =>
     jwt.sign({ id }, process.env.JWT_SECRET, {
         expiresIn: "7d"
     });
+
+const setAuthCookie = (res, token) => {
+    res.cookie("token", token, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "production",
+        sameSite: "lax",
+        maxAge: 7 * 24 * 60 * 60 * 1000,
+        path: "/",
+    });
+};
 
 
 // @desc    Register a new user
@@ -35,13 +94,15 @@ const registerUser = async (req, res, next) => {
         password,
     });
 
-    if (user)   
+    if (user)
     {
+        const token = generateToken(user._id);
+        setAuthCookie(res, token);
+
         res.status(201).json({
             _id: user._id,
             name: user.name,
             email: user.email,
-            token: generateToken(user._id),
             role: user.role,
             deliveryAddress: user.deliveryAddress,
         });
@@ -70,12 +131,15 @@ const authUser = async (req, res, next) => {
 
     if (user && (await user.matchPassword(password)))
     {
+        const token = generateToken(user._id);
+        setAuthCookie(res, token);
+
         res.json({
             _id: user._id,
             name: user.name,
             email: user.email,
-            token: generateToken(user._id),
-            role: user.role
+            role: user.role,
+            deliveryAddress: user.deliveryAddress,
         });
     } else
     {
@@ -133,11 +197,28 @@ const updateUserProfile = async (req, res, next) => {
         user.name = nextName || user.name;
         user.email = nextEmail || user.email;
 
-        user.deliveryAddress = {
-            address: deliveryAddress.address?.trim() || req.body.address?.trim() || user.deliveryAddress?.address,
-            city: deliveryAddress.city?.trim() || req.body.city?.trim() || user.deliveryAddress?.city,
-            phone: deliveryAddress.phone?.trim() || req.body.phone?.trim() || user.deliveryAddress?.phone,
+        const nextDeliveryAddress = {
+            address: deliveryAddress.address !== undefined
+                ? sanitizeString(deliveryAddress.address)
+                : sanitizeString(req.body.address ?? ""),
+            landmark: deliveryAddress.landmark !== undefined
+                ? sanitizeString(deliveryAddress.landmark)
+                : sanitizeString(req.body.landmark ?? ""),
+            city: deliveryAddress.city !== undefined
+                ? sanitizeString(deliveryAddress.city)
+                : sanitizeString(req.body.city ?? ""),
+            phone: deliveryAddress.phone !== undefined
+                ? sanitizeString(deliveryAddress.phone)
+                : sanitizeString(req.body.phone ?? ""),
         };
+
+        user.deliveryAddress = nextDeliveryAddress;
+        // Enforce Lagos-only addresses using explicit LGA whitelist
+        if (user.deliveryAddress.address && !isAllowedLagosCity(user.deliveryAddress.city))
+        {
+            res.status(400);
+            throw new Error("Delivery address must be in Lagos");
+        }
         const updatedUser = await user.save();
         res.json({
             _id: updatedUser._id,
@@ -203,5 +284,16 @@ const getUsers = async (req, res, next) => {
     res.json(users);
 };
 
+const logoutUser = (req, res) => {
+    res.clearCookie("token", {
+        httpOnly: true,
+        sameSite: "lax",
+        secure: process.env.NODE_ENV === "production",
+        path: "/",
+    });
 
-export { registerUser, authUser, getUserProfile, updateUserProfile, changeUserPassword, getUsers };
+    res.status(200).json({ message: "Logged out successfully" });
+};
+
+
+export { registerUser, authUser, getUserProfile, updateUserProfile, changeUserPassword, getUsers, logoutUser };

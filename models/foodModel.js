@@ -18,6 +18,10 @@ const foodSchema = mongoose.Schema(
             type: String,
             required: true
         },
+        popular: {
+            type: Boolean,
+            default: false,
+        },
         category: {
             type: String,
             required: true,
@@ -31,6 +35,10 @@ const foodSchema = mongoose.Schema(
         available: {
             type: Boolean,
             default: true
+        },
+        ingredients: {
+            type: [String],
+            default: [],
         },
         additionalInfo: {
             type: String,

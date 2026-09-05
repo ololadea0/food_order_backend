@@ -23,6 +23,7 @@ const userSchema = mongoose.Schema(
         },
         deliveryAddress: {
             address: String,
+            landmark: String,
             city: String,
             phone: String,
         }
