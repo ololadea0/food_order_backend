@@ -172,6 +172,20 @@ const createOrder = asyncHandler(async (req, res) => {
     const populatedWithUser = await Order.findById(populatedOrder._id)
         .populate("orderItems.food", "name price preparationTime image")
         .populate("user", "name email phone");
+
+    try
+    {
+        await Notification.create({
+            recipientRole: "admin",
+            order: populatedWithUser._id,
+            message: `New order #${populatedWithUser._id} received from ${req.user?.name || "customer"}.`,
+            type: "system",
+        });
+    } catch (e)
+    {
+        console.error("Failed to create admin order notification", e);
+    }
+
     res.status(201).json(populatedWithUser);
 });
 
