@@ -58,7 +58,9 @@ export const setAuthCookie = (res, token) => {
     res.cookie("token", token, {
         httpOnly: true,
         secure: process.env.NODE_ENV === "production",
-        sameSite: "lax",
+        // For cross-site requests (frontend on Netlify, backend on Render)
+        // cookies must be SameSite='none' and Secure in production.
+        sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
         maxAge: 7 * 24 * 60 * 60 * 1000,
         path: "/",
     });
