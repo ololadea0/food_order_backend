@@ -83,9 +83,16 @@ const orderSchema = mongoose.Schema({
     comments: [
         {
             user: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+            authorRole: { type: String, enum: ["customer", "admin"], default: "customer" },
             message: String,
             type: { type: String, enum: ["comment", "complaint", "feedback"], default: "comment" },
             createdAt: { type: Date, default: Date.now },
+            replies: [{
+                user: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+                authorRole: { type: String, enum: ["customer", "admin"], default: "admin" },
+                message: String,
+                createdAt: { type: Date, default: Date.now },
+            }],
         },
     ],
     isDeleted: {

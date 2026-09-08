@@ -3,50 +3,13 @@ import Notification from "../models/notificationModel.js";
 import asyncHandler from "express-async-handler";
 import Food from "../models/foodModel.js";
 import Setting from "../models/settingModel.js";
-import mongoose from "mongoose";
-
-// Server-side sanitization and Lagos LGA whitelist
-const LAGOS_LGAS = [
-    "agege",
-    "ajeromi-ifelodun",
-    "alimosho",
-    "amuwo-odofin",
-    "apapa",
-    "badagry",
-    "epe",
-    "eti-osa",
-    "ibeju-lekki",
-    "ifako-ijaiye",
-    "ikeja",
-    "ikorodu",
-    "kosofe",
-    "lagos island",
-    "lagos mainland",
-    "mushin",
-    "oshodi-isolo",
-    "ojo",
-    "surulere",
-    "somolu",
-    "ikoyi",
-    "lekki",
-];
-
-const sanitizeString = (v = "") => {
-    if (!v) return "";
-    let s = String(v).trim();
-    s = s.replace(/https?:\/\/\S+/gi, "");
-    s = s.replace(/[\x00-\x1F\x7F]/g, "");
-    s = s.replace(/[\u{1F300}-\u{1F9FF}]/gu, "");
-    s = s.replace(/\s+/g, " ");
-    return s.slice(0, 200).trim();
-};
-
-const isAllowedLagosCity = (city = "") => {
-    const c = String(city || "").toLowerCase().trim();
-    if (!c) return false;
-    if (c.includes("lagos")) return true;
-    return LAGOS_LGAS.some((g) => c === g || c.includes(g));
-};
+import {
+    sanitizeString,
+    isAllowedLagosCity,
+    validateOrderItems,
+    getConfiguredDeliveryFee,
+    notifyOrderEvent,
+} from "./orderControllerHelpers.js";
 
 
 // @desc    Create new order
@@ -87,31 +50,13 @@ const createOrder = asyncHandler(async (req, res) => {
         }
     }
 
-    // fetch configured delivery fee (fallback to 1000)
-    let configuredDeliveryFee = 1000;
-    try
-    {
-        const settings = await Setting.findOne();
-        if (settings && typeof settings.deliveryFee === 'number') configuredDeliveryFee = settings.deliveryFee;
-    } catch (err)
-    {
-        // ignore and use fallback
-    }
+    const configuredDeliveryFee = await getConfiguredDeliveryFee(Setting);
+    const orderDeliveryFee = orderType === "delivery" ? configuredDeliveryFee : 0;
 
-    let orderDeliveryFee = orderType === "delivery" ? configuredDeliveryFee : 0;
-
-    // ✅ Validate IDs first
-    for (const item of orderItems)
+    const validationError = validateOrderItems(orderItems);
+    if (validationError)
     {
-        if (!mongoose.Types.ObjectId.isValid(item.food))
-        {
-            return res.status(400).json({ message: `Invalid food ID: ${item.food}` });
-        }
-
-        if (!Number.isInteger(item.qty) || item.qty <= 0 || item.qty > 100)
-        {
-            return res.status(400).json({ message: `Invalid quantity for item. Must be between 1 and 100` });
-        }
+        return res.status(400).json({ message: validationError });
     }
 
     // ✅ Fetch all foods at once
@@ -175,7 +120,8 @@ const createOrder = asyncHandler(async (req, res) => {
 
     try
     {
-        await Notification.create({
+        await notifyOrderEvent({
+            Notification,
             recipientRole: "admin",
             order: populatedWithUser._id,
             message: `New order #${populatedWithUser._id} received from ${req.user?.name || "customer"}.`,
@@ -196,6 +142,8 @@ const getMyOrders = asyncHandler(async (req, res) => {
 
     const orders = await Order.find({ user: req.user._id, isDeleted: false })
         .populate("orderItems.food", "name price preparationTime image")
+        .populate("comments.user", "name email")
+        .populate("comments.replies.user", "name email")
         .sort({ createdAt: -1 });
     res.json(orders);
 
@@ -230,6 +178,8 @@ const getOrders = asyncHandler(async (req, res) => {
     const orders = await Order.find({ isDeleted: false })
         .populate("orderItems.food", "name price preparationTime image")
         .populate("user", "name email phone")
+        .populate("comments.user", "name email")
+        .populate("comments.replies.user", "name email")
         .sort({ createdAt: -1 });
 
     res.json(orders);
@@ -241,13 +191,13 @@ const getOrders = asyncHandler(async (req, res) => {
 // @access  Private (Admin)
 const updateOrderStatus = asyncHandler(async (req, res) => {
 
-    const allowedStatuses = ["pending", "confirmed", "onTheWay", "availableForPickup", "preparing", "delivered", "cancelled"];
+    const adminAllowedStatuses = ["pending", "confirmed", "onTheWay", "availableForPickup", "preparing"];
 
     const { status } = req.body;
 
-    if (!allowedStatuses.includes(status))
+    if (!adminAllowedStatuses.includes(status))
     {
-        return res.status(400).json({ message: "Invalid status value" });
+        return res.status(400).json({ message: "Delivery and cancellation must be confirmed by the customer." });
     }
 
     const order = await Order.findOne({
@@ -260,34 +210,19 @@ const updateOrderStatus = asyncHandler(async (req, res) => {
         return res.status(404).json({ message: "Order not found" });
     }
 
-    if (status === "delivered" && !order.isPaid)
-    {
-        return res.status(400).json({ message: "Cannot mark as delivered if not paid" });
-    }
-
     order.status = status;
-
-    // Handle delivery logic ONLY
-    if (status === "delivered")
-    {
-        order.isDelivered = true;
-        order.deliveredAt = Date.now();
-    } else
-    {
-        order.isDelivered = false;
-        order.deliveredAt = null;
-    }
+    order.isDelivered = false;
+    order.deliveredAt = null;
 
     const saved = await order.save();
-    // re-fetch populated version to ensure client gets food details
     const updatedOrder = await Order.findById(saved._id)
         .populate("orderItems.food", "name price preparationTime image")
         .populate("user", "name email phone");
 
-    // create notification for the customer about the status change
     try
     {
-        await Notification.create({
+        await notifyOrderEvent({
+            Notification,
             recipientUser: updatedOrder.user._id,
             order: updatedOrder._id,
             message: `Order #${updatedOrder._id} status updated to ${updatedOrder.status}`,
@@ -295,8 +230,53 @@ const updateOrderStatus = asyncHandler(async (req, res) => {
         });
     } catch (e)
     {
-        // ignore notification errors
         console.error("Failed to create notification", e);
+    }
+
+    res.json(updatedOrder);
+});
+
+// @desc    Customer confirms delivery
+// @route   PUT /api/orders/:id/confirm-delivery
+// @access  Private
+const confirmOrderDelivered = asyncHandler(async (req, res) => {
+    const order = await Order.findOne({
+        _id: req.params.id,
+        user: req.user._id,
+        isDeleted: false,
+    }).populate("orderItems.food");
+
+    if (!order)
+    {
+        return res.status(404).json({ message: "Order not found" });
+    }
+
+    if (!["onTheWay", "availableForPickup"].includes(order.status))
+    {
+        return res.status(400).json({ message: "Only orders that are on the way or ready for pickup can be confirmed as delivered." });
+    }
+
+    order.status = "delivered";
+    order.isDelivered = true;
+    order.deliveredAt = Date.now();
+
+    const saved = await order.save();
+    const updatedOrder = await Order.findById(saved._id)
+        .populate("orderItems.food", "name price preparationTime image")
+        .populate("user", "name email phone");
+
+    try
+    {
+        await notifyOrderEvent({
+            Notification,
+            recipientRole: "admin",
+            order: updatedOrder._id,
+            message: `Customer confirmed delivery for order #${updatedOrder._id}.`,
+            type: "status",
+        });
+    } catch (e)
+    {
+        console.error("Failed to create delivery confirmation notification", e);
     }
 
     res.json(updatedOrder);
@@ -354,7 +334,8 @@ const cancelOrder = asyncHandler(async (req, res) => {
         .populate("user", "name email phone");
     try
     {
-        await Notification.create({
+        await notifyOrderEvent({
+            Notification,
             recipientUser: updatedOrder.user._id,
             order: updatedOrder._id,
             message: `Your order #${updatedOrder._id} was cancelled`,
@@ -377,9 +358,11 @@ const addOrderComment = asyncHandler(async (req, res) => {
 
     const comment = {
         user: req.user._id,
+        authorRole: req.user.role === "admin" ? "admin" : "customer",
         message: String(message).trim(),
         type: type || "comment",
         createdAt: Date.now(),
+        replies: [],
     };
 
     order.comments = order.comments || [];
@@ -388,12 +371,14 @@ const addOrderComment = asyncHandler(async (req, res) => {
 
     const populated = await Order.findById(saved._id)
         .populate("orderItems.food", "name price preparationTime image")
-        .populate("user", "name email phone");
+        .populate("user", "name email phone")
+        .populate("comments.user", "name email")
+        .populate("comments.replies.user", "name email");
 
-    // notify admins about the comment
     try
     {
-        await Notification.create({
+        await notifyOrderEvent({
+            Notification,
             recipientRole: "admin",
             order: populated._id,
             message: `New comment on order #${populated._id}: ${comment.message}`,
@@ -407,5 +392,47 @@ const addOrderComment = asyncHandler(async (req, res) => {
     res.status(201).json(populated);
 });
 
+const addOrderCommentReply = asyncHandler(async (req, res) => {
+    const order = await Order.findOne({ _id: req.params.id, isDeleted: false });
+    if (!order) return res.status(404).json({ message: "Order not found" });
 
-export { createOrder, getMyOrders, getOrderById, getOrders, updateOrderStatus, deleteOrder, cancelOrder, addOrderComment };
+    const comment = order.comments?.id(req.params.commentId);
+    if (!comment) return res.status(404).json({ message: "Comment not found" });
+
+    const { message } = req.body;
+    if (!message || !String(message).trim()) return res.status(400).json({ message: "Reply message required" });
+
+    comment.replies = comment.replies || [];
+    comment.replies.push({
+        user: req.user._id,
+        authorRole: req.user.role === "admin" ? "admin" : "customer",
+        message: String(message).trim(),
+        createdAt: Date.now(),
+    });
+
+    const saved = await order.save();
+    const populated = await Order.findById(saved._id)
+        .populate("orderItems.food", "name price preparationTime image")
+        .populate("user", "name email phone")
+        .populate("comments.user", "name email")
+        .populate("comments.replies.user", "name email");
+
+    try
+    {
+        await notifyOrderEvent({
+            Notification,
+            recipientUser: order.user,
+            order: populated._id,
+            message: `Admin replied to your comment on order #${populated._id}.`,
+            type: "comment",
+        });
+    } catch (e)
+    {
+        console.error("Failed to create notification", e);
+    }
+
+    res.status(201).json(populated);
+});
+
+
+export { createOrder, getMyOrders, getOrderById, getOrders, updateOrderStatus, deleteOrder, cancelOrder, confirmOrderDelivered, addOrderComment, addOrderCommentReply };

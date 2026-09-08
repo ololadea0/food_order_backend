@@ -1,69 +1,11 @@
-import jwt from "jsonwebtoken";
 import User from "../models/userModel.js";
-
-// Basic server-side sanitization and Lagos LGA whitelist
-const LAGOS_LGAS = [
-    "agege",
-    "ajeromi-ifelodun",
-    "alimosho",
-    "amuwo-odofin",
-    "apapa",
-    "badagry",
-    "epe",
-    "eti-osa",
-    "ibeju-lekki",
-    "ifako-ijaiye",
-    "ikeja",
-    "ikorodu",
-    "kosofe",
-    "lagos island",
-    "lagos mainland",
-    "mushin",
-    "oshodi-isolo",
-    "ojo",
-    "surulere",
-    "somolu",
-    "ikoyi",
-    "lekki",
-    "ikorodu north",
-    "ikorodu south",
-];
-
-const sanitizeString = (v = "") => {
-    if (!v) return "";
-    let s = String(v).trim();
-    // remove urls
-    s = s.replace(/https?:\/\/\S+/gi, "");
-    // remove control chars
-    s = s.replace(/[\x00-\x1F\x7F]/g, "");
-    // remove many emoji ranges
-    s = s.replace(/[\u{1F300}-\u{1F9FF}]/gu, "");
-    // collapse whitespace
-    s = s.replace(/\s+/g, " ");
-    return s.slice(0, 200).trim();
-};
-
-const isAllowedLagosCity = (city = "") => {
-    const c = String(city || "").toLowerCase().trim();
-    if (!c) return false;
-    if (c.includes("lagos")) return true;
-    return LAGOS_LGAS.some((g) => c === g || c.includes(g));
-};
-
-const generateToken = (id) =>
-    jwt.sign({ id }, process.env.JWT_SECRET, {
-        expiresIn: "7d"
-    });
-
-const setAuthCookie = (res, token) => {
-    res.cookie("token", token, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === "production",
-        sameSite: "lax",
-        maxAge: 7 * 24 * 60 * 60 * 1000,
-        path: "/",
-    });
-};
+import {
+    sanitizeString,
+    isAllowedLagosCity,
+    generateToken,
+    setAuthCookie,
+    serializeUser,
+} from "./authControllerHelpers.js";
 
 
 // @desc    Register a new user
@@ -99,13 +41,7 @@ const registerUser = async (req, res, next) => {
         const token = generateToken(user._id);
         setAuthCookie(res, token);
 
-        res.status(201).json({
-            _id: user._id,
-            name: user.name,
-            email: user.email,
-            role: user.role,
-            deliveryAddress: user.deliveryAddress,
-        });
+        res.status(201).json(serializeUser(user));
     } else
     {
         res.status(400);
@@ -134,13 +70,7 @@ const authUser = async (req, res, next) => {
         const token = generateToken(user._id);
         setAuthCookie(res, token);
 
-        res.json({
-            _id: user._id,
-            name: user.name,
-            email: user.email,
-            role: user.role,
-            deliveryAddress: user.deliveryAddress,
-        });
+        res.json(serializeUser(user));
     } else
     {
         res.status(400);
@@ -156,14 +86,7 @@ const getUserProfile = async (req, res, next) => {
     const user = await User.findById(req.user._id);
     if (user)
     {
-        res.json({
-            _id: user._id,
-            name: user.name,
-            email: user.email,
-            role: user.role,
-            deliveryAddress: user.deliveryAddress
-
-        });
+        res.json(serializeUser(user));
     } else
     {
         res.status(404);
@@ -220,14 +143,7 @@ const updateUserProfile = async (req, res, next) => {
             throw new Error("Delivery address must be in Lagos");
         }
         const updatedUser = await user.save();
-        res.json({
-            _id: updatedUser._id,
-            name: updatedUser.name,
-            email: updatedUser.email,
-            role: updatedUser.role,
-            deliveryAddress: updatedUser.deliveryAddress
-
-        });
+        res.json(serializeUser(updatedUser));
     } else
     {
         res.status(404);

@@ -5,7 +5,7 @@ dotenv.config();
 
 const PAYSTACK_BASE_URL = "https://api.paystack.co";
 const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY;
-const FRONTEND_URL = (process.env.FRONTEND_URL || "http://localhost:5173").replace(/\/$/, "");
+const FRONTEND_URL = (process.env.FRONTEND_URL || "http://localhost:5174").replace(/\/$/, "");
 
 if (!PAYSTACK_SECRET_KEY)
 {
@@ -33,10 +33,9 @@ const initializeTransaction = async (email, amount, orderId) => {
                 metadata: {
                     orderId,
                 },
-                // Keep the return URL environment-driven so local and hosted deployments
-                // can share the same payment code path. Use the frontend's /payment/success
-                // route which the app maps to the payment success handler.
-                callback_url: `${FRONTEND_URL}/payment/success`,
+                // Use the frontend's actual success route so the callback lands on a real page
+                // after Paystack returns the user.
+                callback_url: `${FRONTEND_URL}/payment-success`,
             },
             { headers: getHeaders() }
         );
